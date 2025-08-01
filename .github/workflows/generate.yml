@@ -1,0 +1,107 @@
+name: Auto LineageOS Tree Generator
+
+on:
+  workflow_dispatch:
+    inputs:
+      DUMP_URL:
+        description: 'Dump link'
+        required: true
+        default: ''
+      DUMP_BRANCH:
+        description: 'Dump branch'
+        required: true
+        default: ''
+      DEVICE_BRAND:
+        description: 'Device manufacturer'
+        required: true
+        default: ''
+      CODENAME:
+        description: 'Device codename'
+        required: true
+        default: ''
+      GIT_NAME:
+        description: 'GitHub account user name'
+        required: true
+        default: ''
+      GIT_EMAIL:
+        description: 'GitHub account email adress'
+        required: true
+        default: ''
+
+jobs:
+  gen-tree:
+    name: Create LineageOS compatible tree
+    if: github.event.repository.owner.id == github.event.sender.id
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.LOS }}
+      DU: ${{ github.event.inputs.DUMP_URL }}
+      DB: ${{ github.event.inputs.DEVICE_BRAND}}
+      DUB: ${{ github.event.inputs.DUMP_BRANCH }}
+      CN: ${{ github.event.inputs.CODENAME }}
+      GN: ${{ github.event.inputs.GIT_NAME }}
+      GE: ${{ github.event.inputs.GIT_EMAIL }}
+
+    permissions:
+      contents: write
+    steps:
+    - name: Check Out
+      if: check-out
+      uses: actions/checkout@v4
+
+    - name: Update and install required packages
+      id: setting-up
+      run: |
+        sudo apt update 
+        sudo apt upgrade -y
+        sudo apt install cpio python3 git -y
+
+    - name: Setup GitHub CLI
+      id: setup-gh
+      run: |
+        type -p curl >/dev/null || (sudo apt update && sudo apt install curl -y)
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+        && sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+        && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+        && sudo apt update \
+        && sudo apt install gh -y
+
+    - name: Cloning ROM Dump 
+      id: clone-dump
+      run: |
+        cd /home
+        sudo mkdir LOS-Generator
+        sudo chmod 777 LOS-Generator
+        cd LOS-Generator
+        git clone ${{ env.DU }} -b ${{ env.DUB }}
+
+    - name: Installing AOSPDTGEN
+      id: setup-aosp-dtgen
+      run: |
+        pip3 install aospdtgen
+
+    - name: Creating LineageOS Tree
+      id: gen-dt
+      run: |
+        cd /home/LOS-Generator/*
+        working_dump=$(pwd)
+        python3 -m aospdtgen $working_dump
+        echo "Successful!"
+        mv $working_dump/output /home/LOS-Generator
+
+    - name: Setting up Git
+      id: setting-up-git
+      run: |
+        git config --global user.name "${{ env.GN }}"
+        git config --global user.email "${{ env.GE }}"
+
+    - name: Upload LineageOS Tree for GitHub
+      id: upload-to-gh
+      run: |
+        cd /home/LOS-Generator/output
+        git init
+        git branch -M lineage-${{ env.CN }}
+        git add .
+        git commit -s -m "${{ env.CN }}: LineageOS compatible device tree"
+        gh repo create lineage_device_${{ env.DB }}_${{ env.CN }} --public --description="LineageOS compatible device tree for ${{ env.CN }}." --source=. --remote=origin --push
+        echo "Successful!"
